@@ -1,0 +1,99 @@
+#---------------------------------------------------------------------------------
+# BJ2GC: Bejeweled 2 on the GameCube, an Octave C++ project around the game
+# logic in ../src/game (the same files the PC checker builds).
+#
+# Normally built by Octave's packager:
+#   Octave.exe -headless -project <path>/BJ2GC/BJ2GC.octp -build GameCube
+# which runs this makefile, then writes Packaged/GameCube/ (.dol + .iso).
+# The data first: python tools/make_data.py (Scripts/Data, from your copy).
+#
+# By hand: make -f Makefile_GCN  -> Build/GCN/BJ2GC.dol
+#---------------------------------------------------------------------------------
+.SUFFIXES:
+.SECONDARY:
+
+ifeq ($(strip $(DEVKITPPC)),)
+$(error "Please set DEVKITPPC in your environment. export DEVKITPPC=<path to>devkitPPC")
+endif
+
+include $(DEVKITPPC)/gamecube_rules
+
+export OCTAVE ?= $(abspath $(CURDIR)/../../octave-libogc)
+export GAME := $(abspath $(CURDIR)/../src)
+
+TARGET		:=	BJ2GC
+BUILD		:=	Intermediate/GCN
+SOURCES		:=	Source Generated $(GAME)/game
+OUTPUT_DIR	:=	$(CURDIR)/Build/GCN
+
+CFLAGS	= -g -O2 -Wall $(MACHDEP) $(INCLUDE) -DPLATFORM_GAMECUBE=1 -DPLATFORM_DOLPHIN=1 -DAPI_GX=1
+CXXFLAGS	=	$(CFLAGS) -std=gnu++20
+
+# Test builds: AUTOPLAY=1 makes the hint's move by itself, for runs with no
+# one at the pad (Dolphin).
+ifneq ($(AUTOPLAY),)
+CFLAGS	+=	-DBJ2_AUTOPLAY=1
+endif
+
+# EXTRA: more flags for a test build (-DNAME=1 ...).
+CFLAGS	+=	$(EXTRA)
+
+LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map -Wl,--gc-sections
+
+# No -lbba: Source/octave_unused.cpp stands in for Octave's network code.
+LIBS	:=	-lEngine -lBullet -lasnd -lfat -logc -lm
+
+ENGINE_LIB_DIR := $(OCTAVE)/Engine/Build/GCN
+BULLET_LIB_DIR := $(OCTAVE)/External/Bullet/Build/GCN
+
+ifneq ($(notdir $(BUILD)),$(notdir $(CURDIR)))
+#---------------------------------------------------------------------------------
+
+export VPATH	:=	$(foreach dir,$(SOURCES),$(abspath $(dir)))
+export DEPSDIR	:=	$(CURDIR)/$(BUILD)
+
+CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+
+export LD	:=	$(CXX)
+export OFILES	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o)
+
+export INCLUDE	:=	-I$(CURDIR)/Source \
+					-I$(GAME) \
+					-I$(OCTAVE)/Engine/Source \
+					-I$(OCTAVE)/Engine/Source/Engine \
+					-I$(OCTAVE)/External \
+					-I$(OCTAVE)/External/Bullet \
+					-I$(OCTAVE)/External/Vorbis \
+					-I$(CURDIR)/$(BUILD) \
+					-I$(LIBOGC_INC)
+
+export LIBPATHS	:=	-L$(ENGINE_LIB_DIR) -L$(BULLET_LIB_DIR) -L$(LIBOGC_LIB)
+
+export ENGINE_LIB := $(ENGINE_LIB_DIR)/libEngine.a
+export OUTPUT	:=	$(OUTPUT_DIR)/$(TARGET)
+
+.PHONY: $(BUILD) OutputDir clean
+
+$(BUILD): OutputDir
+	@[ -d $@ ] || mkdir -p $@
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile_GCN
+
+OutputDir:
+	@[ -d $(OUTPUT_DIR) ] || mkdir -p $(OUTPUT_DIR)
+
+clean:
+	@echo clean ...
+	@rm -fr $(BUILD) $(OUTPUT).dol $(OUTPUT).elf
+
+#---------------------------------------------------------------------------------
+else
+
+$(OUTPUT).dol: $(OUTPUT).elf
+$(OUTPUT).elf: $(OFILES) $(ENGINE_LIB)
+
+-include $(DEPSDIR)/*.d
+
+#---------------------------------------------------------------------------------
+endif
+#---------------------------------------------------------------------------------

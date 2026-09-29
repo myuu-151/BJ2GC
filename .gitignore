@@ -1,0 +1,10 @@
+build/
+__pycache__/
+
+# The Octave project's build output, and the data made from your copy
+BJ2GC/Intermediate/
+BJ2GC/Build/
+BJ2GC/Generated/
+BJ2GC/Packaged/
+BJ2GC/Makefile_TEMP
+BJ2GC/Scripts/Data/
