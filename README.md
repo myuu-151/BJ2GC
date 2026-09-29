@@ -5,12 +5,6 @@
 Bejeweled 2 Deluxe's Classic mode on the GameCube, built with
 [Octave-libogc](https://github.com/myuu-151/Octave-libogc).
 
-The game is written anew to play as the original does. The board, its random
-numbers, the scoring, the timings, the effects and the level transition all
-follow the original, and the fill and random numbers match it exactly. None of
-the game's art, fonts, sounds or music is in this repository. You make them
-yourself from your own Steam copy of the game, and they go onto the disc you
-build.
 
 ## What's in it
 
