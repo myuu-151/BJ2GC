@@ -28,6 +28,12 @@ constexpr float kFrameY = 1.0f;
 constexpr int kBarFull = 708;
 constexpr float kPi = 3.14159265f;
 
+// The board-wide light sweep: a 1 in this chance each idle update (test
+// builds can make it often).
+#ifndef BJ2_SWEEP_CHANCE
+#define BJ2_SWEEP_CHANCE 6000
+#endif
+
 // For the log: batches of lines cleared, and swaps that made none.
 int g_matches = 0, g_bad_swaps = 0;
 
@@ -385,7 +391,7 @@ void Bj2App::UpdateLighting() {
     if (sweep_ >= 0) {
         sweep_ += 0.02f;
         if (sweep_ > 1) sweep_ = -1;
-    } else if (game_.GetState() == bj2::Game::State::Idle && light_rand_.Next() % 6000 == 0) {
+    } else if (game_.GetState() == bj2::Game::State::Idle && light_rand_.Next() % BJ2_SWEEP_CHANCE == 0) {
         sweep_ = 0;
     }
 }
@@ -417,16 +423,12 @@ void Bj2App::Lighting(float (&light)[64][9]) const {
         if (g->power && game_.ClearStep(g) < 0) source(g->x + 42, g->y + 42, 20, 10, std::fabs(2 * p - 1));
         float charge = game_.Charge(g);
         if (charge > 0) source(g->x + 42, g->y + 42, 15, 10, std::fabs(std::sin(15 * charge)) * 0.6f);
-        // The cursor's light on its gem, and a little on the facing sides of those around it.
+        // The cursor's light on its gem, gliding from facet to facet.
         if (hover_[i] > 0) {
-            int f = kWalk[int(hover_phase_[i])];
-            light[i][f] += hover_[i];
-            for (int dy = -1; dy <= 1; dy++)
-                for (int dx = -1; dx <= 1; dx++) {
-                    int c = i % 8 + dx, r = i / 8 + dy;
-                    if ((dx || dy) && unsigned(c) < 8 && unsigned(r) < 8)
-                        light[r * 8 + c][f < 8 ? (f + 4) % 8 : 8] += 0.3f * hover_[i];
-                }
+            const int step = int(hover_phase_[i]);
+            const float frac = hover_phase_[i] - float(step);
+            light[i][kWalk[step]] += hover_[i] * (1 - frac);
+            light[i][kWalk[(step + 1) % 10]] += hover_[i] * frac;
         }
         if (sweep_ >= 0) {
             float v = 1 - 9 * std::fabs(sweep_ - (i / 8 + i % 8) / 16.0f);
