@@ -315,6 +315,15 @@ def write_effects():
     write('lightning.tex', grey('lightning.png'), RGB565)
     write('lightning_center.tex', grey('lightning_center.png'), RGB565)
     write('hint_arrow.tex', load('hint_arrow.gif').resize((64, 50), Image.LANCZOS), RGB5A3)
+    # The gems' lighting (al_litgems.gif): a row a colour, a column a facet
+    # (up, up-left, ... up-right, then the middle), added over the gem.
+    lit = grey('al_litgems.gif')
+    grid = Image.new('RGB', (9 * CELL, 7 * CELL))
+    for row in range(7):
+        for col in range(9):
+            cell = lit.crop((col * 84, row * 84, col * 84 + 84, row * 84 + 84)).resize((CELL, CELL), Image.LANCZOS)
+            grid.paste(cell, (col * CELL, row * CELL))
+    write('litgems.tex', grid, RGB565, (9, 7), (CELL, CELL))
     arrows = Image.new('RGBA', (40, 40), (255, 255, 255, 0))
     arrows.putalpha(Image.open(images / 'help_indicator_arrows_.gif').convert('L').crop((0, 0, 40, 40)))
     write('hint_glow.tex', arrows.resize((24, 24), Image.LANCZOS), RGB5A3)

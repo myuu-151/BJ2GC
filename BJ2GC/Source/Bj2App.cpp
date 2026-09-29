@@ -64,6 +64,7 @@ bool Bj2App::Initialize() {
     ok = warp_.Load() && ok;
     ok = font_points_.Load("font_points") && ok;
     ok = fx_.Load() && ok;
+    ok = gx2d::Load(litgems_, "litgems.tex") && ok;
     for (int c = 0; c < 7; c++) {
         char name[32];
         std::snprintf(name, sizeof(name), "gem%d.tex", c);
@@ -87,9 +88,36 @@ bool Bj2App::Initialize() {
 void Bj2App::LoadBackdrop(int level) {
     if (level == backdrop_level_) return;
     backdrop_level_ = level;
+    if (next_thread_ != LWP_THREAD_NULL) {
+        LWP_JoinThread(next_thread_, nullptr);  // done by now: it had the whole whirlpool
+        next_thread_ = LWP_THREAD_NULL;
+    }
+    if (next_ready_ && next_level_ == level) {
+        std::swap(backdrop_, next_backdrop_);
+        gx2d::Free(next_backdrop_);
+        next_ready_ = false;
+        return;
+    }
     char name[32];
     std::snprintf(name, sizeof(name), "backdrop%02d.tex", (level - 1) % 10);
     gx2d::Load(backdrop_, name);
+}
+
+void Bj2App::PreloadBackdrop(int level) {
+    if (next_thread_ != LWP_THREAD_NULL) return;
+    next_level_ = level;
+    next_ready_ = false;
+    // Below the main thread's priority: it reads while the frame waits.
+    if (LWP_CreateThread(&next_thread_, PreloadThread, this, nullptr, 64 * 1024, 50) != 0)
+        next_thread_ = LWP_THREAD_NULL;
+}
+
+void* Bj2App::PreloadThread(void* p) {
+    Bj2App* app = static_cast<Bj2App*>(p);
+    char name[32];
+    std::snprintf(name, sizeof(name), "backdrop%02d.tex", (app->next_level_ - 1) % 10);
+    app->next_ready_ = gx2d::Load(app->next_backdrop_, name);
+    return nullptr;
 }
 
 void Bj2App::ReadPad() {
@@ -239,7 +267,10 @@ void Bj2App::Step() {
     // next board has flown in, "NO MOVES!" at the end.
     const bj2::Game::State state = game_.GetState();
     if (state == bj2::Game::State::LevelUp) {
-        if (last_state_ != bj2::Game::State::LevelUp) warp_.Start();
+        if (last_state_ != bj2::Game::State::LevelUp) {
+            warp_.Start();
+            PreloadBackdrop(game_.Level() + 1);
+        }
         warp_.Update(game_.StateTime());
     }
     if (state == bj2::Game::State::Ready && last_state_ != bj2::Game::State::Ready)
@@ -256,6 +287,7 @@ void Bj2App::Step() {
     fx_.Update();
     last_state_ = state;
     big_text_.Update();
+    UpdateLighting();
 
     // The bar, twice an update, a 120th of the way and 1 more to the level's
     // progress; still while the board flies in (state 0xd).
@@ -338,6 +370,75 @@ void Bj2App::Render(float fb_width, float fb_height) {
                          GXColor{255, 255, 255, 255}, 0);
 }
 
+void Bj2App::UpdateLighting() {
+    // The cursor's gem brightens, the rest fade; each light walks round its facets.
+    for (int i = 0; i < 64; i++) {
+        hover_[i] = std::max(0.0f, hover_[i] - 0.012f);
+        hover_phase_[i] += 0.0625f;
+        if (hover_phase_[i] >= 10) hover_phase_[i] -= 10;
+    }
+    if (game_.GetState() == bj2::Game::State::Idle) {
+        float& h = hover_[cursor_row_ * bj2::Board::kSize + cursor_col_];
+        h = std::min(1.0f, h + 0.045f);
+    }
+    // Now and then, a light sweeps the board corner to corner.
+    if (sweep_ >= 0) {
+        sweep_ += 0.02f;
+        if (sweep_ > 1) sweep_ = -1;
+    } else if (game_.GetState() == bj2::Game::State::Idle && light_rand_.Next() % 6000 == 0) {
+        sweep_ = 0;
+    }
+}
+
+void Bj2App::Lighting(float (&light)[64][9]) const {
+    // Facets 0-7: up, up-left, left, down-left, down, down-right, right, up-right.
+    static const float kDir[8][2] = {{0, -1}, {-0.7071f, -0.7071f}, {-1, 0}, {-0.7071f, 0.7071f},
+                                     {0, 1},  {0.7071f, 0.7071f},   {1, 0},  {0.7071f, -0.7071f}};
+    static const int kWalk[10] = {0, 4, 8, 2, 6, 3, 7, 8, 1, 5};
+    for (auto& l : light)
+        for (float& v : l) v = 0;
+    const bj2::Board& board = game_.GetBoard();
+    // A light at sx, sy on every gem near it: the facets facing it.
+    auto source = [&](float sx, float sy, float scale, float offset, float intensity) {
+        for (int i = 0; i < 64; i++) {
+            const bj2::Gem* g = board.At(i % 8, i / 8);
+            if (!g) continue;
+            float d = (sx - g->x - 42) / scale, e = (sy - g->y - 42) / scale;
+            float q = std::max(1.0f, d * d + e * e - offset);
+            if (q >= 100) continue;
+            for (int f = 0; f < 8; f++)
+                light[i][f] += std::max(0.0f, (kDir[f][0] * d + kDir[f][1] * e) / q * intensity);
+        }
+    };
+    const float p = std::fmod(updates_ * 0.006f, 1.0f);
+    for (int i = 0; i < 64; i++) {
+        const bj2::Gem* g = board.At(i % 8, i / 8);
+        if (!g) continue;
+        if (g->power && game_.ClearStep(g) < 0) source(g->x + 42, g->y + 42, 20, 10, std::fabs(2 * p - 1));
+        float charge = game_.Charge(g);
+        if (charge > 0) source(g->x + 42, g->y + 42, 15, 10, std::fabs(std::sin(15 * charge)) * 0.6f);
+        // The cursor's light on its gem, and a little on the facing sides of those around it.
+        if (hover_[i] > 0) {
+            int f = kWalk[int(hover_phase_[i])];
+            light[i][f] += hover_[i];
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    int c = i % 8 + dx, r = i / 8 + dy;
+                    if ((dx || dy) && unsigned(c) < 8 && unsigned(r) < 8)
+                        light[r * 8 + c][f < 8 ? (f + 4) % 8 : 8] += 0.3f * hover_[i];
+                }
+        }
+        if (sweep_ >= 0) {
+            float v = 1 - 9 * std::fabs(sweep_ - (i / 8 + i % 8) / 16.0f);
+            if (v > 0) {
+                light[i][3] += 0.8f * v;
+                light[i][7] += 0.6f * v;
+                light[i][8] += 0.6f * v;
+            }
+        }
+    }
+}
+
 void Bj2App::StartCollapse() {
     collapse_time_ = 0;
     for (int i = 0; i < 64; i++) {
@@ -401,6 +502,8 @@ void Bj2App::DrawBoard(float fb_width, float fb_height, bool gems, bool clip, bo
     const float pulse = 0.5f + 0.5f * std::sin(float(updates_) * 0.08f);
     const bool collapsing = collapse_time_ >= 0 && game_.GetState() == bj2::Game::State::GameOver;
     const bj2::Gem* cube = game_.ZapCube();
+    static float light[64][9];
+    Lighting(light);
 
     // The board's cells are its 1024x768 positions, scaled; gems outside
     // the board (falling in) are cut off at its top edge.
@@ -460,6 +563,16 @@ void Bj2App::DrawBoard(float fb_width, float fb_height, bool gems, bool clip, bo
                 gx2d::Draw(hypergem_, int(updates_ / 6), sx, sy, ss, ss, tint);
             } else if (g->color < 7) {
                 gx2d::Draw(gems_[g->color], frame, sx, sy, ss, ss, tint);
+                // Its lighting, when it's still in its cell and whole.
+                if (step < 0 && frame == 0 && !collapsing && g->x == float(board.ColumnX(col)) &&
+                    g->y == float(board.RowY(row)))
+                    for (int f = 0; f < 9; f++) {
+                        float l = light[row * bj2::Board::kSize + col][f];
+                        if (l <= 0.01f) continue;
+                        uint8_t v = uint8_t(std::min(255.0f, 255 * l));
+                        gx2d::Draw(litgems_, g->color * 9 + f, sx, sy, ss, ss, GXColor{v, v, v, 255},
+                                   gx2d::Blend::Add);
+                    }
                 if (g->power && step < 0) {
                     gx2d::Draw(glows_[g->color], int(updates_ / 4), sx, sy, ss, ss,
                                GXColor{255, 255, 255, uint8_t(160 + 95 * pulse)}, gx2d::Blend::Add);

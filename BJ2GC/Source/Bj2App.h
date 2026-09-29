@@ -3,6 +3,8 @@
 // the original draws its small art at.
 #pragma once
 
+#include <ogc/lwp.h>
+
 #include <cstdint>
 #include <string>
 
@@ -50,6 +52,14 @@ private:
     uint16_t held_ = 0, pressed_ = 0;
     int repeat_ = 0;         // D-pad auto-repeat, updates held
     int backdrop_level_ = -1;
+    // The next level's backdrop, read from the disc on a thread while the
+    // level ends, so the warp doesn't stop for it.
+    void PreloadBackdrop(int level);
+    static void* PreloadThread(void* app);
+    gx2d::Texture next_backdrop_;
+    int next_level_ = -1;
+    volatile bool next_ready_ = false;
+    lwp_t next_thread_ = LWP_THREAD_NULL;
 
     gx2d::Texture backdrop_, frame_, selector_, hypergem_, scorepod_;
     gx2d::Texture bar_[3];  // the level bar's glow: left, middle, right
@@ -60,6 +70,16 @@ private:
     gx2d::Texture gems_[7], glows_[7];
     gx2d::Font font_score_, font_small_, font_label_, font_big_, font_points_;
     BoardFx fx_;
+
+    // The gems' lighting (0x596931): nine highlights a gem, the eight
+    // facets and the middle, lit by power gems, electrified gems, the
+    // cursor (a light walking round its facets) and a sweep now and then.
+    void UpdateLighting();
+    void Lighting(float (&light)[64][9]) const;
+    gx2d::Texture litgems_;
+    float hover_[64] = {}, hover_phase_[64] = {};
+    float sweep_ = -1;
+    bj2::MTRand light_rand_{77};
 
     // Out of moves (0x595ea2): 200 updates of shaking, then the gems fly
     // at the viewer, each its own way.
