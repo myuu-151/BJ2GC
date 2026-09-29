@@ -6,27 +6,6 @@ Bejeweled 2 Deluxe's Classic mode on the GameCube, built with
 [Octave-libogc](https://github.com/myuu-151/Octave-libogc).
 
 
-## What's in it
-
-- **Classic mode:** swaps, cascades, power gems and their explosions,
-  hypercubes and their lightning, levels, and "no more moves".
-- **The original's look at 640x480:** the backdrop for each level, the gems,
-  the frame, the score pod, the glowing level bar, and the game's own bitmap
-  fonts.
-- **The original's effects:**
-  - shards, sparkles and screen shake;
-  - springy score popups in each gem's colour;
-  - two turning stars on each power gem;
-  - the hint arrow;
-  - EXCELLENT and INCREDIBLE;
-  - the board collapsing when there are no more moves.
-- **The level transition:** the backdrop swirls into a black hole and the board
-  collapses into it, then the hyperspace tunnel, then the next level flies in
-  under "LEVEL n".
-- **The original's sound effects and voices**, played where the original plays
-  them.
-- **The Classic music:** *Beyond the Network*, streamed from the disc and looped.
-
 ## What you need
 
 - **Bejeweled 2 Deluxe, installed through Steam.** The data is made only from a
