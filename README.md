@@ -55,6 +55,22 @@ build.
 
 ## Building
 
+### The easy way
+
+Double-click **`Build BJ2GC.bat`**. The builder window:
+
+- checks each thing above and says how to fix anything missing, and lets you
+  choose where Octave-libogc is;
+- builds everything with one button, **Build BJ2GC**, showing its progress;
+- opens the folder with your ISO when it's done.
+
+Tick **Test buttons** to add Z/L/R (see *Test builds*). Tick **Make the data
+again** after the data tool changes.
+
+![The builder](docs/images/builder.png)
+
+### By hand
+
 **1. Make the data** from your copy of the game:
 
 ```
@@ -130,6 +146,7 @@ CMake from this folder.
 | `src/game/` | The game: board, fill, matches, scoring, swaps, cascades, hypercubes, levels. Platform-free. |
 | `BJ2GC/Source/` | The GameCube side: drawing (GX), sound, music, effects, the level transition |
 | `BJ2GC/` | The Octave project: `BJ2GC.octp`, `Makefile_GCN`, the disc banner |
+| `Build BJ2GC.bat`, `tools/builder.py` | The builder window |
 | `tools/make_data.py` | Makes the data from your Steam copy |
 | `tools/check/` | `bj2check` |
 | `docs/` | How the original's effects and level transition work |

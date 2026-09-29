@@ -8,3 +8,4 @@ BJ2GC/Generated/
 BJ2GC/Packaged/
 BJ2GC/Makefile_TEMP
 BJ2GC/Scripts/Data/
+tools/.builder.json

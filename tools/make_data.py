@@ -256,7 +256,10 @@ def write_font(name, desc, scale=1.0):
     write(name + '.tex', atlas, RGBA8)
 
 
-FFMPEG = HERE.parent / 'octave-libogc' / 'External' / 'ffmpeg' / 'bin' / 'ffmpeg.exe'
+# The ffmpeg that comes with Octave-libogc (next to this repo, or $OCTAVE).
+import os
+OCTAVE = Path(os.environ.get('OCTAVE') or HERE.parent / 'octave-libogc')
+FFMPEG = OCTAVE / 'External' / 'ffmpeg' / 'bin' / 'ffmpeg.exe'
 SOUNDS = ['select', 'bad2', 'gotset2', 'gotsetbig2', 'combo22', 'combo32', 'combo42', 'combo52', 'combo62',
           'combo72', 'gemongem2', 'explode2', 'hypergem_creation', 'electro_start', 'electro_explode',
           'Level_Complete', 'Go', 'No_More_Moves', 'excellent1', 'Incredible', 'Get_ready', 'Good', 'multishot', 'whirlpool1', 'electro_path']
