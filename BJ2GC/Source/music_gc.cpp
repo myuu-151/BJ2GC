@@ -13,6 +13,8 @@
 #include "System/System.h"
 #include "vorbis/vorbisfile.h"
 
+void OctLog(const char* format, ...);  // Octave's log (not SYS_Report: see Bj2App.cpp)
+
 namespace music_gc {
 
 namespace {
@@ -128,11 +130,11 @@ uint32_t Decode(uint8_t* dst, uint32_t want) {
             g_open = g_read == g_pass + g_size;
             g_pass = g_read;
             if (g_open) g_open = OpenPass();
-            if (!g_open) SYS_Report("bj2: music: could not loop\n");
+            if (!g_open) OctLog("bj2: music: could not loop");
         } else if (++errors > 8) {
             ov_clear(&g_vf);
             g_open = false;
-            SYS_Report("bj2: music: decoding failed\n");
+            OctLog("bj2: music: decoding failed");
         }
     }
     return done;
@@ -145,7 +147,7 @@ void Callback(s32) {}  // non-null: a voice that runs dry waits for more
 bool Start() {
     char header[kHeader] __attribute__((aligned(32)));
     if (!SYS_ReadFileRange(kPath, true, 0, kHeader, header) || std::memcmp(header, "BJMU", 4) != 0) {
-        SYS_Report("bj2: music: no %s\n", kPath);
+        OctLog("bj2: music: no %s", kPath);
         return false;
     }
     const uint8_t* h = reinterpret_cast<const uint8_t*>(header);
@@ -153,17 +155,17 @@ bool Start() {
     g_ring = static_cast<uint8_t*>(memalign(32, kRing));
     for (uint8_t*& b : g_buf) b = static_cast<uint8_t*>(memalign(32, kBufferBytes));
     if (g_size == 0 || !g_ring || !g_buf[kBuffers - 1]) {
-        SYS_Report("bj2: music: %u bytes, or no memory\n", unsigned(g_size));
+        OctLog("bj2: music: %u bytes, or no memory", unsigned(g_size));
         return false;
     }
     if (LWP_SemInit(&g_sem, 0, 64) != 0 ||
         LWP_CreateThread(&g_thread, Reader, nullptr, nullptr, 64 * 1024, 50) != 0) {
-        SYS_Report("bj2: music: no reader thread\n");
+        OctLog("bj2: music: no reader thread");
         return false;
     }
     g_open = OpenPass();
     if (!g_open)
-        SYS_Report("bj2: music: the Ogg won't open (%u of %u bytes read%s)\n", unsigned(g_read), unsigned(g_written),
+        OctLog("bj2: music: the Ogg won't open (%u of %u bytes read%s)", unsigned(g_read), unsigned(g_written),
                    g_failed ? ", a disc read failed" : "");
     return g_open;
 }

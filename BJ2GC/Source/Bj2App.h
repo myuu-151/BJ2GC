@@ -19,6 +19,8 @@ public:
     void Update(float delta_time);
     // While Octave renders its UI (StageWidget): the board and its art.
     void Render(float fb_width, float fb_height);
+    // For the watchdog's log: what the main thread is doing now.
+    static void Where(const char* where);
 
     const bj2::Game& GetGame() const { return game_; }
     int CursorCol() const { return cursor_col_; }
@@ -52,14 +54,14 @@ private:
     uint16_t held_ = 0, pressed_ = 0;
     int repeat_ = 0;         // D-pad auto-repeat, updates held
     int backdrop_level_ = -1;
-    // The next level's backdrop, read from the disc on a thread while the
-    // level ends, so the warp doesn't stop for it.
+    // The next level's backdrop, read from the disc a piece a frame while
+    // the level ends (as Octave's Texture::ReloadPart), so the warp doesn't
+    // stop for it.
     void PreloadBackdrop(int level);
-    static void* PreloadThread(void* app);
-    gx2d::Texture next_backdrop_;
+    gx2d::PartLoad next_backdrop_;
     int next_level_ = -1;
-    volatile bool next_ready_ = false;
-    lwp_t next_thread_ = LWP_THREAD_NULL;
+    uint64_t next_read_us_ = 0;  // time spent reading it, for the log
+    int next_read_frames_ = 0;
 
     gx2d::Texture backdrop_, frame_, selector_, hypergem_, scorepod_;
     gx2d::Texture bar_[3];  // the level bar's glow: left, middle, right

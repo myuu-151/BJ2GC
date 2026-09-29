@@ -8,8 +8,17 @@
 #include <cmath>
 #include <cstdio>
 
+#include <malloc.h>
+#include <unistd.h>
+
+#include "System/System.h"
 #include "audio_gc.h"
 #include "music_gc.h"
+
+// Octave's log: /octiso.log on the SD card, Dolphin's log window without one.
+// (Not SYS_Report: on the console it talks to the IPL's EXI device, which
+// Octave found can hang.)
+void OctLog(const char* format, ...);
 
 namespace {
 
@@ -36,6 +45,36 @@ constexpr float kPi = 3.14159265f;
 
 // For the log: batches of lines cleared, and swaps that made none.
 int g_matches = 0, g_bad_swaps = 0;
+
+// The next backdrop's texels read ahead each frame: 8 KB, a few ms from the SD card.
+constexpr uint32_t kBackdropPiece = 8 * 1024;
+
+// For the watchdog: the main thread's counts, and where it is.
+volatile uint32_t g_frames = 0, g_steps = 0;
+volatile int g_state = 0;
+const char* volatile g_where = "start";
+
+// Above every other thread, as PPGC's: when the game stops (no update and no
+// frame for 3 seconds) it logs where the main thread was, then every 15
+// seconds. Its lines reach the card whenever the main thread waits.
+void* Watchdog(void*) {
+    uint32_t frames = g_frames, steps = g_steps;
+    int still = 0;  // half seconds with neither
+    for (;;) {
+        usleep(500 * 1000);
+        if (g_frames != frames || g_steps != steps) {
+            frames = g_frames;
+            steps = g_steps;
+            still = 0;
+            continue;
+        }
+        still++;
+        if (still == 6 || (still > 6 && (still - 6) % 30 == 0))
+            OctLog("bj2: STALLED %d s: frame %u, update %u, state %d, at %s", still / 2, unsigned(frames),
+                   unsigned(steps), g_state, g_where);
+    }
+    return nullptr;
+}
 
 // The pads, as PAD_ScanPads would read them: a port with no controller is
 // reset, or one plugged in again is never seen; a read that failed on the
@@ -85,45 +124,44 @@ bool Bj2App::Initialize() {
     game_.global.SRand(uint32_t(gettime()));
     game_.NewGame();
     LoadBackdrop(game_.Level());
-    SYS_Report("bj2: sounds %s, music %s\n", sounds ? "loaded" : "MISSING", music ? "streaming" : "MISSING");
-    SYS_Report("bj2: data %s; gem0 %dx%d, frame %dx%d, backdrop %dx%d\n", ok ? "loaded" : "MISSING", gems_[0].width,
-               gems_[0].height, frame_.width, frame_.height, backdrop_.width, backdrop_.height);
+    OctLog("bj2: sounds %s, music %s", sounds ? "loaded" : "MISSING", music ? "streaming" : "MISSING");
+    OctLog("bj2: data %s; gem0 %dx%d, frame %dx%d, backdrop %dx%d", ok ? "loaded" : "MISSING", gems_[0].width,
+           gems_[0].height, frame_.width, frame_.height, backdrop_.width, backdrop_.height);
+    static lwp_t watchdog = LWP_THREAD_NULL;
+    if (watchdog == LWP_THREAD_NULL && LWP_CreateThread(&watchdog, Watchdog, nullptr, nullptr, 64 * 1024, 100) != 0)
+        OctLog("bj2: no watchdog");
     return ok;
 }
 
 void Bj2App::LoadBackdrop(int level) {
     if (level == backdrop_level_) return;
     backdrop_level_ = level;
-    if (next_thread_ != LWP_THREAD_NULL) {
-        LWP_JoinThread(next_thread_, nullptr);  // done by now: it had the whole whirlpool
-        next_thread_ = LWP_THREAD_NULL;
+    g_where = "backdrop swap";
+    if (next_level_ == level && next_backdrop_.Started()) {
+        // Read by now (it had the whole whirlpool); if not, the rest now.
+        const bool rest = next_backdrop_.Reading();
+        if (next_backdrop_.Read(UINT32_MAX) && next_backdrop_.Take(backdrop_)) {
+            OctLog("bj2: backdrop %d in: %d frames, %u ms of reads%s", level, next_read_frames_,
+                   unsigned(next_read_us_ / 1000), rest ? " (the rest read at the flash)" : "");
+            next_level_ = -1;
+            return;
+        }
+        OctLog("bj2: backdrop %d: the read ahead failed; read now", level);
     }
-    if (next_ready_ && next_level_ == level) {
-        std::swap(backdrop_, next_backdrop_);
-        gx2d::Free(next_backdrop_);
-        next_ready_ = false;
-        return;
-    }
+    next_backdrop_.Cancel();
+    next_level_ = -1;
     char name[32];
     std::snprintf(name, sizeof(name), "backdrop%02d.tex", (level - 1) % 10);
-    gx2d::Load(backdrop_, name);
+    if (!gx2d::Load(backdrop_, name)) OctLog("bj2: backdrop %s: not read", name);
 }
 
 void Bj2App::PreloadBackdrop(int level) {
-    if (next_thread_ != LWP_THREAD_NULL) return;
-    next_level_ = level;
-    next_ready_ = false;
-    // Below the main thread's priority: it reads while the frame waits.
-    if (LWP_CreateThread(&next_thread_, PreloadThread, this, nullptr, 64 * 1024, 50) != 0)
-        next_thread_ = LWP_THREAD_NULL;
-}
-
-void* Bj2App::PreloadThread(void* p) {
-    Bj2App* app = static_cast<Bj2App*>(p);
     char name[32];
-    std::snprintf(name, sizeof(name), "backdrop%02d.tex", (app->next_level_ - 1) % 10);
-    app->next_ready_ = gx2d::Load(app->next_backdrop_, name);
-    return nullptr;
+    std::snprintf(name, sizeof(name), "backdrop%02d.tex", (level - 1) % 10);
+    next_level_ = next_backdrop_.Start(name) ? level : -1;
+    next_read_us_ = 0;
+    next_read_frames_ = 0;
+    if (next_level_ < 0) OctLog("bj2: backdrop %s: no read ahead", name);
 }
 
 void Bj2App::ReadPad() {
@@ -161,18 +199,32 @@ void Bj2App::ReadPad() {
 }
 
 void Bj2App::Update(float delta_time) {
+    g_where = "music";
     music_gc::Update();
+    g_where = "pad";
     ReadPad();
     owed_ += std::min(delta_time, 0.1f);
     while (owed_ >= kUpdateTime) {
         owed_ -= kUpdateTime;
+        g_where = "update";
         Step();
+        g_steps = g_steps + 1;
         pressed_ = 0;
+    }
+    if (next_backdrop_.Reading()) {
+        g_where = "backdrop read";
+        const uint64_t t0 = SYS_GetTimeMicroseconds();
+        next_backdrop_.Read(kBackdropPiece);
+        next_read_us_ += SYS_GetTimeMicroseconds() - t0;
+        next_read_frames_++;
     }
     // In hyperspace, the next level's backdrop is already at the tunnel's end.
     bool warped = game_.GetState() == bj2::Game::State::LevelUp && warp_.Active();
     LoadBackdrop(game_.Level() + (warped ? 1 : 0));
+    g_where = "octave";
 }
+
+void Bj2App::Where(const char* where) { g_where = where; }
 
 void Bj2App::Step() {
     updates_++;
@@ -274,11 +326,23 @@ void Bj2App::Step() {
     const bj2::Game::State state = game_.GetState();
     if (state == bj2::Game::State::LevelUp) {
         if (last_state_ != bj2::Game::State::LevelUp) {
+            // Memory: free in malloc's arena, and never yet claimed by it.
+            const struct mallinfo mi = mallinfo();
+            const unsigned unclaimed =
+                unsigned(static_cast<char*>(SYS_GetArena1Hi()) - static_cast<char*>(SYS_GetArena1Lo()));
+            OctLog("bj2: update %u: level %d done, the warp; free %uK + %uK unclaimed", unsigned(updates_),
+                   game_.Level(), unsigned(mi.fordblks / 1024), unclaimed / 1024);
             warp_.Start();
             PreloadBackdrop(game_.Level() + 1);
         }
+        const bool was_active = warp_.Active();
         warp_.Update(game_.StateTime());
+        if (warp_.Active() && !was_active) OctLog("bj2: update %u: hyperspace", unsigned(updates_));
     }
+    if (state != last_state_ && (state == bj2::Game::State::FlyIn || state == bj2::Game::State::Ready ||
+                                 state == bj2::Game::State::GameOver))
+        OctLog("bj2: update %u: state %d, level %d", unsigned(updates_), int(state), game_.Level());
+    g_state = int(state);
     if (state == bj2::Game::State::Ready && last_state_ != bj2::Game::State::Ready)
         big_text_.Show(game_.Message(), 80, font_big_);
     if (state == bj2::Game::State::GameOver && last_state_ != bj2::Game::State::GameOver) {
@@ -314,24 +378,29 @@ void Bj2App::Step() {
 
 void Bj2App::Render(float fb_width, float fb_height) {
     static int frames = 0;
+    g_frames = g_frames + 1;
+    g_where = "render";
     if (frames++ < 3 || frames % 600 == 0)
-        SYS_Report("bj2: frame %d at %.0fx%.0f: update %u, state %d, score %d, level %d; %d matches, %d swapped back\n",
-                   frames, fb_width, fb_height, unsigned(updates_), int(game_.GetState()), game_.Score(),
-                   game_.Level(), g_matches, g_bad_swaps);
+        OctLog("bj2: frame %d at %.0fx%.0f: update %u, state %d, score %d, level %d; %d matches, %d swapped back",
+               frames, fb_width, fb_height, unsigned(updates_), int(game_.GetState()), game_.Score(),
+               game_.Level(), g_matches, g_bad_swaps);
     gx2d::Begin(fb_width, fb_height);
     const bj2::Game::State state = game_.GetState();
     const bool warping = state == bj2::Game::State::LevelUp;
 
     // Hyperspace takes the whole screen.
     if (warping && warp_.Active()) {
+        g_where = "render hyperspace";
         warp_.DrawHyperspace(backdrop_);
         return;
     }
 
-    if (warping)
+    if (warping) {
+        g_where = "render whirlpool";
         warp_.DrawWhirlpool(backdrop_);
-    else
+    } else {
         gx2d::Draw(backdrop_, 0, 0, 0, 640, 480);
+    }
 
     if (warping) {
         // Collapsing into the black hole (FUN_005a1787): shrunk towards the

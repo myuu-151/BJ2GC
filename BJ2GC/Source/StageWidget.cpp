@@ -29,6 +29,7 @@ void StageWidget::Render()
     // UI coordinates are a virtual resolution over the whole of it).
     GXRModeObj* rmode = &GetEngineState()->mSystem.mGxRmode;
     mApp->Render(float(rmode->fbWidth), float(rmode->efbHeight));
+    Bj2App::Where("octave (the frame's end: the GPU, the retrace)");
 
     // Back to Octave's UI state (viewport, scissor, matrices, vertex format)
     // for anything drawn after the stage.

@@ -21,7 +21,29 @@ struct Texture {
 // A .tex file under the data folder (BJ2GC/Scripts/Data/NAME); `repeat`
 // tiles it (its sides a power of two).
 bool Load(Texture& t, const std::string& name, bool repeat = false);
+// Its texels go once the GPU is done with the frame it may still be drawing
+// (Octave's GxDeferFree).
 void Free(Texture& t);
+
+// A .tex read a piece at a time on the main thread, as Octave's
+// Texture::ReloadPart: Start reads its header and makes room, each Read up
+// to `max_bytes` more of its texels, and Take hands it over once all read.
+class PartLoad {
+public:
+    bool Start(const std::string& name, bool repeat = false);
+    bool Read(uint32_t max_bytes);  // true once all of it is in; false too if a read failed
+    bool Reading() const { return !path_.empty() && at_ < bytes_; }
+    bool Started() const { return !path_.empty(); }
+    bool Take(Texture& t);  // `t`'s old texels freed as Free
+    void Cancel();
+
+private:
+    Texture t_;
+    std::string path_;
+    uint32_t at_ = 0, bytes_ = 0;
+    uint8_t format_ = 0;
+    bool repeat_ = false;
+};
 
 // Before drawing: the projection, vertex format and blending for 2D over a
 // framebuffer of `fb_width` x `fb_height`.

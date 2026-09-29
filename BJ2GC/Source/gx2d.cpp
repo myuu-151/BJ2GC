@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "Graphics/GX/GxUtils.h"
 #include "System/System.h"
 
 namespace gx2d {
@@ -29,9 +30,12 @@ void SetBlend(Blend b) {
         GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
 }
 
-// One TEV stage: the texel (or white) times the colour register C0, or, for
-// meshes, the texel times each vertex's colour.
-enum class Mode { None, Plain, Textured, Coloured };
+// One TEV stage: the texel times the colour register C0, or, for meshes, the
+// texel times each vertex's colour. Always a texture coordinate: plain
+// colour is a white texture (as Octave's t_white), never no colour channel
+// and no texture coordinate at all, which the console's GPU hung on (the
+// level transition's rectangles; Dolphin drew them).
+enum class Mode { None, Textured, Coloured };
 Mode g_mode = Mode::None;
 
 void SetMode(Mode mode) {
@@ -40,35 +44,41 @@ void SetMode(Mode mode) {
     GX_ClearVtxDesc();
     GX_SetVtxDesc(GX_VA_POS, GX_DIRECT);
     if (mode == Mode::Coloured) GX_SetVtxDesc(GX_VA_CLR0, GX_DIRECT);
-    if (mode != Mode::Plain) {
-        GX_SetVtxDesc(GX_VA_TEX0, GX_DIRECT);
-        GX_SetNumTexGens(1);
-        GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
-    } else {
-        GX_SetNumTexGens(0);
-    }
+    GX_SetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    GX_SetNumTexGens(1);
+    GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
     if (mode == Mode::Coloured) {
         GX_SetNumChans(1);
         GX_SetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHTNULL, GX_DF_NONE, GX_AF_NONE);
         GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
         GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_RASC, GX_CC_ZERO);
         GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_RASA, GX_CA_ZERO);
-    } else if (mode == Mode::Textured) {
+    } else {
         GX_SetNumChans(0);
         GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLORNULL);
         GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_C0, GX_CC_ZERO);
         GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
-    } else {
-        GX_SetNumChans(0);
-        GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLORNULL);
-        GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_C0);
-        GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_A0);
     }
     GX_SetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GX_SetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
 }
 
-void SetTextured(bool textured) { SetMode(textured ? Mode::Textured : Mode::Plain); }
+void SetTextured() { SetMode(Mode::Textured); }
+
+// 4x4 white texels (RGBA8), for plain colour.
+const Texture& White() {
+    static Texture white;
+    if (!white.Loaded()) {
+        white.texels = memalign(32, 64);
+        std::memset(white.texels, 0xff, 64);
+        DCFlushRange(white.texels, 64);
+        white.width = white.height = white.frame_w = white.frame_h = 4;
+        GX_InitTexObj(&white.obj, white.texels, 4, 4, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        GX_InitTexObjFilterMode(&white.obj, GX_NEAR, GX_NEAR);
+        GX_InvalidateTexAll();
+    }
+    return white;
+}
 
 }  // namespace
 
@@ -102,12 +112,79 @@ bool Load(Texture& t, const std::string& name, bool repeat) {
     const uint8_t wrap = repeat ? GX_REPEAT : GX_CLAMP;
     GX_InitTexObj(&t.obj, t.texels, uint16_t(t.width), uint16_t(t.height), format, wrap, wrap, GX_FALSE);
     GX_InitTexObjFilterMode(&t.obj, GX_LINEAR, GX_LINEAR);
+    // New texels, maybe where old ones were cached (as Octave's textures).
+    GX_InvalidateTexAll();
     return true;
 }
 
 void Free(Texture& t) {
-    if (t.texels) free(t.texels);
+    // The GPU may still be drawing the last frame from them (Graphics_GX.cpp).
+    if (t.texels) GxDeferFree(t.texels);
     t = Texture{};
+}
+
+bool PartLoad::Start(const std::string& name, bool repeat) {
+    Cancel();
+    const std::string path = std::string(kRoot) + name;
+    uint8_t d[32] __attribute__((aligned(32)));
+    if (!SYS_ReadFileRange(path.c_str(), true, 0, sizeof(d), reinterpret_cast<char*>(d)) ||
+        std::memcmp(d, "BJTX", 4) != 0)
+        return false;
+    t_.width = be16(d + 4);
+    t_.height = be16(d + 6);
+    format_ = uint8_t(be16(d + 8));
+    t_.frames_x = be16(d + 10);
+    t_.frames_y = be16(d + 12);
+    t_.frame_w = be16(d + 14);
+    t_.frame_h = be16(d + 16);
+    bytes_ = GX_GetTexBufferSize(uint16_t(t_.width), uint16_t(t_.height), format_, GX_FALSE, 0);
+    t_.texels = memalign(32, bytes_);
+    if (!t_.texels || bytes_ == 0) {
+        Cancel();
+        return false;
+    }
+    path_ = path;
+    at_ = 0;
+    repeat_ = repeat;
+    return true;
+}
+
+bool PartLoad::Read(uint32_t max_bytes) {
+    if (path_.empty()) return false;
+    // Straight into the texels, 32 KB a read at most, as Octave's ReloadPart.
+    // Nothing draws them yet, so no waiting for the GPU.
+    constexpr uint32_t kPiece = 32 * 1024;
+    const uint32_t stop = max_bytes >= bytes_ - at_ ? bytes_ : at_ + max_bytes;
+    while (at_ < stop) {
+        const uint32_t n = stop - at_ < kPiece ? stop - at_ : kPiece;
+        if (!SYS_ReadFileRange(path_.c_str(), true, 32 + at_, n, static_cast<char*>(t_.texels) + at_)) {
+            Cancel();
+            return false;
+        }
+        at_ += n;
+    }
+    return at_ >= bytes_;
+}
+
+bool PartLoad::Take(Texture& t) {
+    if (path_.empty() || at_ < bytes_) return false;
+    DCFlushRange(t_.texels, bytes_);
+    const uint8_t wrap = repeat_ ? GX_REPEAT : GX_CLAMP;
+    GX_InitTexObj(&t_.obj, t_.texels, uint16_t(t_.width), uint16_t(t_.height), format_, wrap, wrap, GX_FALSE);
+    GX_InitTexObjFilterMode(&t_.obj, GX_LINEAR, GX_LINEAR);
+    GX_InvalidateTexAll();
+    Free(t);
+    t = t_;
+    t_ = Texture{};
+    path_.clear();
+    at_ = bytes_ = 0;
+    return true;
+}
+
+void PartLoad::Cancel() {
+    Free(t_);
+    path_.clear();
+    at_ = bytes_ = 0;
 }
 
 void Begin(float fb_width, float fb_height) {
@@ -137,7 +214,7 @@ void Begin(float fb_width, float fb_height) {
     GX_SetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
     // Force both to be set.
     g_mode = Mode::None;
-    SetTextured(true);
+    SetTextured();
     g_blend = Blend::Add;
     SetBlend(Blend::Alpha);
 }
@@ -145,7 +222,7 @@ void Begin(float fb_width, float fb_height) {
 void DrawPart(const Texture& t, float sx, float sy, float sw, float sh, float x, float y, float w, float h,
               GXColor tint, Blend blend) {
     if (!t.Loaded()) return;
-    SetTextured(true);
+    SetTextured();
     SetBlend(blend);
     GX_SetTevColor(GX_TEVREG0, tint);
     GX_LoadTexObj(const_cast<GXTexObj*>(&t.obj), GX_TEXMAP0);
@@ -238,7 +315,7 @@ void Font::Draw(const std::string& text, float x, float y, float scale, GXColor 
                     gx = std::floor(gx + 0.5f);
                     gy = std::floor(gy + 0.5f);
                 }
-                SetTextured(true);
+                SetTextured();
                 SetBlend(Blend::Alpha);
                 GX_SetTevColor(GX_TEVREG0, tint);
                 GX_LoadTexObj(const_cast<GXTexObj*>(&texture_.obj), GX_TEXMAP0);
@@ -298,15 +375,7 @@ void DrawMesh(const Texture& t, const Vertex* v, int count, Blend blend, uint8_t
 }
 
 void Rect(float x, float y, float w, float h, GXColor color) {
-    SetTextured(false);
-    SetBlend(Blend::Alpha);
-    GX_SetTevColor(GX_TEVREG0, color);
-    GX_Begin(GX_QUADS, kFormat, 4);
-    GX_Position2f32(x, y);
-    GX_Position2f32(x + w, y);
-    GX_Position2f32(x + w, y + h);
-    GX_Position2f32(x, y + h);
-    GX_End();
+    DrawPart(White(), 0, 0, 4, 4, x, y, w, h, color, Blend::Alpha);
 }
 
 }  // namespace gx2d
