@@ -11,7 +11,8 @@ Bejeweled 2 Deluxe's Classic mode on the GameCube, built with
 - **Bejeweled 2 Deluxe, installed through Steam.** The data is made only from a
   Steam install.
 - **[devkitPro](https://devkitpro.org/)** with devkitPPC and libogc, and the
-  `DEVKITPRO` and `DEVKITPPC` environment variables set.
+  `DEVKITPRO` and `DEVKITPPC` environment variables set; or [gekko-toolchain](https://github.com/myuu-151/gekko-toolchain) (the same
+  toolchain in one zip). With both, the builder's **GameCube toolchain** switch picks one.
 - **[Octave-libogc](https://github.com/myuu-151/Octave-libogc)**, cloned next to
   this repository, with its GameCube engine library built
   (`Engine/Build/GCN/libEngine.a`) and `Octave.exe`:

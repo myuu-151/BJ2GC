@@ -9,6 +9,7 @@ BJ2GC/Packaged/
 BJ2GC/Makefile_TEMP
 BJ2GC/Scripts/Data/
 tools/.builder.json
+tools/.toolchain.json
 
 # Console test logs (octiso.log from the SD card)
 hwlogs/
